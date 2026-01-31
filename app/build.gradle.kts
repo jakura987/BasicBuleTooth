@@ -79,6 +79,8 @@ dependencies {
     implementation(libs.autodispose.android)
     implementation(libs.autodispose.android.archcomponents)
 
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
