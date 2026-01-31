@@ -24,10 +24,6 @@ class MainActivity : AppCompatActivity() {
             Timber.plant(Timber.DebugTree())
         }
 
-//        findViewById<Button>(R.id.blueToothConnection).setOnClickListener{
-//            Toast.makeText(this@MainActivity, "blueToothConnect", Toast.LENGTH_SHORT).show()
-//        }
-
 
     }
 
