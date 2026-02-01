@@ -79,7 +79,15 @@ dependencies {
     implementation(libs.autodispose.android)
     implementation(libs.autodispose.android.archcomponents)
 
-    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+
+    //蓝牙
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+
+
 
 
     testImplementation(libs.junit)
