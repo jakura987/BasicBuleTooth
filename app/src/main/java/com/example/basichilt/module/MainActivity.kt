@@ -40,6 +40,16 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
     private lateinit var btnScan: Button
+    private lateinit var tvSendLog: TextView
+
+    //循环发送
+    private lateinit var btnSendLoop: Button
+    private val loopHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var loopRunning = false
+    private var loopRunnable: Runnable? = null
+    // 循环发送间隔（ms），先固定 500ms
+    private val loopPeriodMs = 500L
+
 
     private val requestPerms =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
@@ -66,6 +76,9 @@ class MainActivity : AppCompatActivity() {
 
         tvStatus = findViewById(R.id.tv_ble_status)
         btnScan = findViewById(R.id.btn_scan)
+        tvSendLog = findViewById(R.id.tv_send_log)
+
+
 
         // RecyclerView
         val rv = findViewById<RecyclerView>(R.id.rv_devices)
@@ -88,6 +101,11 @@ class MainActivity : AppCompatActivity() {
                         "状态：服务发现完成 ${state.address}（NUS=${state.hasNus}）"
                     is BleGattClient.State.Failed -> "状态：失败 ${state.msg}"
                 }
+
+                // ✅ 断开/失败时自动停止循环
+                if (state is BleGattClient.State.Disconnected || state is BleGattClient.State.Failed) {
+                    stopLoopSend("连接断开/失败")
+                }
             }
         })
 
@@ -109,14 +127,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnClear.setOnClickListener {
-            deviceMap.clear()
-            refreshList()
-
             runBleAction {
-                writeTest01()
+                stopLoopSend("手动断开")     // ✅ 加这一行
+                gattClient.disconnect()
+                tvStatus.text = "状态：已断开"
             }
         }
-
 
 
         // 搜索框过滤
@@ -125,6 +141,51 @@ class MainActivity : AppCompatActivity() {
             filterKey = s?.toString().orEmpty().trim()
             refreshList()
         }
+
+        //发送
+        val etHex = findViewById<TextInputEditText>(R.id.et_hex)
+        val btnSend = findViewById<Button>(R.id.btn_send)
+
+        btnSend.setOnClickListener {
+            runBleAction {
+                // ✅ 手动发送前：先停掉自动循环
+                if (loopRunning) stopLoopSend("手动发送前停止循环")
+
+                val hex = etHex.text?.toString().orEmpty()
+                val bytes = hexToBytesOrNull(hex)
+                if (bytes == null) {
+                    appendSendLog("HEX格式错误：$hex")
+                    return@runBleAction
+                }
+                val ok = gattClient.writeNus(bytes)
+                appendSendLog("send(${bytes.size}B) $hex => $ok")
+                Timber.i("send $hex => $ok")
+            }
+        }
+
+        //循环发送
+        btnSendLoop = findViewById(R.id.btn_send_loop)
+        btnSendLoop.setOnClickListener {
+            if (loopRunning) {
+                stopLoopSend("用户停止")
+            } else {
+                runBleAction {
+                    val hex = etHex.text?.toString().orEmpty()
+                    val bytes = hexToBytesOrNull(hex)
+                    if (bytes == null) {
+                        appendSendLog("HEX格式错误：$hex")
+                        return@runBleAction
+                    }
+                    startLoopSend(bytes, hex)
+                }
+            }
+        }
+
+        //清空日志
+        findViewById<Button>(R.id.btn_clear_log).setOnClickListener {
+            tvSendLog.text = "发送日志：\n"
+        }
+
     }
 
 
@@ -135,12 +196,98 @@ class MainActivity : AppCompatActivity() {
         tvStatus.text = "write 0x01 => $ok\n" + tvStatus.text
     }
 
+    @SuppressLint("MissingPermission")
+    private fun startLoopSend(bytes: ByteArray, hexText: String) {
+        if (loopRunning) return
+        loopRunning = true
+        btnSendLoop.text = "停止循环"
+        appendSendLog("开始循环发送：$hexText  interval=${loopPeriodMs}ms")
+
+        loopRunnable = object : Runnable {
+            override fun run() {
+                // 保险：循环中如果权限被收回，就停掉（一般不会发生）
+                val granted = checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
+                        PackageManager.PERMISSION_GRANTED
+                if (!granted) {
+                    stopLoopSend("CONNECT权限缺失")
+                    return
+                }
+
+                val ok = gattClient.writeNus(bytes)
+                appendSendLog("loop send(${bytes.size}B) => $ok")
+
+                // 如果写失败（比如已断开/特征为空），就停止循环，避免一直刷屏
+                if (!ok) {
+                    stopLoopSend("写失败/可能已断开")
+                    return
+                }
+
+                loopHandler.postDelayed(this, loopPeriodMs)
+            }
+        }
+
+        loopHandler.postDelayed(loopRunnable!!, loopPeriodMs)
+    }
+
+    private fun stopLoopSend(reason: String) {
+        loopRunnable?.let { loopHandler.removeCallbacks(it) }
+        loopRunnable = null
+        if (loopRunning) {
+            loopRunning = false
+            btnSendLoop.text = "循环发送"
+            appendSendLog("停止循环：$reason")
+        }
+    }
+
+
+
+
+    private fun appendSendLog(s: String) {
+        tvSendLog.append(s + "\n")
+        // 尽量滚到末尾
+        tvSendLog.post {
+            val layout = tvSendLog.layout ?: return@post
+            val scroll = layout.getLineTop(tvSendLog.lineCount) - tvSendLog.height
+            tvSendLog.scrollTo(0, scroll.coerceAtLeast(0))
+        }
+    }
+
+
+
+    private fun hexToBytesOrNull(input: String): ByteArray? {
+        // 支持： "01", "010203", "01 02 03", "0x01 0x02"
+        val cleaned = input
+            .trim()
+            .replace("0x", "", ignoreCase = true)
+            .replace("\\s+".toRegex(), "")
+            .uppercase()
+
+        if (cleaned.isEmpty()) return byteArrayOf() // 允许发空（你不想允许就 return null）
+        if (cleaned.length % 2 != 0) return null
+
+        return try {
+            ByteArray(cleaned.length / 2) { i ->
+                val hi = Character.digit(cleaned[i * 2], 16)
+                val lo = Character.digit(cleaned[i * 2 + 1], 16)
+                if (hi == -1 || lo == -1) throw IllegalArgumentException("bad hex")
+                ((hi shl 4) or lo).toByte()
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+
 
     @SuppressLint("MissingPermission")
     private fun connectInternal(address: String) {
-        if (bleScanner.isScanning) stopScanInternal()
+        if (bleScanner.isScanning) {
+            stopScanInternal()
+            btnScan.text = "开始扫描"   // ✅ 加这一行
+        }
         gattClient.connect(address)
     }
+
 
     private fun runBleAction(action: () -> Unit) {
         pendingAction = action
@@ -209,6 +356,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopLoopSend("activity destory")
         runCatching { if (bleScanner.isScanning) stopScanInternal() }
         runCatching { gattClient.disconnect() }
         gattClient.setListener(null)

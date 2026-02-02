@@ -83,25 +83,23 @@ class BleGattClient @Inject constructor(
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun disconnect() {
+        val g = gatt ?: return
+        Timber.i("BLE disconnect()")
+
+        runCatching { g.disconnect() }
+        runCatching { g.close() }   // ✅ 关键：close 才会释放资源
+
+        gatt = null
         nusWriteChar = null
         currentAddress = null
 
-        try {
-            gatt?.disconnect()
-        } catch (_: Throwable) {
-        }
-
-        try {
-            gatt?.close()
-        } catch (_: Throwable) {
-        }
-
-        gatt = null
         postState(State.Disconnected)
     }
 
+
     // （可选）后面你要写 NUS 时用
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    //@RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    @SuppressLint("MissingPermission")
     fun writeNus(bytes: ByteArray): Boolean {
         val g = gatt ?: return false
         val ch = nusWriteChar ?: return false
